@@ -1,61 +1,79 @@
 import os
+import time
+import json
 import requests
 from bs4 import BeautifulSoup
-import time
-from flask import Flask
-from threading import Thread
+from telegram import Bot
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-MOVINGSOON_URL = "https://movingsoon.co.uk/housing-association/clarion-housing/"
-seen = set()
+# Environment variables
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
+CHECK_INTERVAL = int(os.getenv("INTERVAL", 30))  # in seconds
+TARGET_URL = "https://movingsoon.co.uk/agent/clarionhg/"
+DATA_FILE = "listings_seen.json"
 
-def send_alert(title, url):
-    text = f"🏠 New Clarion listing:\n{title}\n{url}"
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        data={"chat_id": TELEGRAM_CHAT_ID, "text": text}
-    )
-    print("📨 Sent alert:", title)
+bot = Bot(token=TELEGRAM_TOKEN)
 
-def get_listings():
-    rsp = requests.get(MOVINGSOON_URL)
-    soup = BeautifulSoup(rsp.text, "html.parser")
-    items = soup.select(".property-content h2 a")
-    new = []
-    for itm in items:
-        url = itm['href']
-        title = itm.get_text(strip=True)
-        if url not in seen:
-            seen.add(url)
-            new.append((title, url))
-    return new
+def load_seen():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
 
-app = Flask('')
-@app.route('/')
-def home():
-    return "✅ Clarion bot is running!"
+def save_seen(seen):
+    with open(DATA_FILE, "w") as f:
+        json.dump(list(seen), f)
 
-def run():
-    app.run(host='0.0.0.0', port=10000)
-
-def self_ping():
-    while True:
-        try:
-            requests.get("https://clarion-alert-bot.onrender.com")
-        except:
-            pass
-        time.sleep(60)
-
-Thread(target=run).start()
-Thread(target=self_ping).start()
-
-print("🤖 Bot started...")
-while True:
+def fetch_listings():
     try:
-        for t, u in get_listings():
-            send_alert(t, u)
-        print("✅ Checked for new listings.")
+        response = requests.get(TARGET_URL, timeout=10)
+        response.raise_for_status()
     except Exception as e:
-        print("⚠️ Error:", e)
-    time.sleep(60)
+        print(f"Error fetching page: {e}")
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    property_cards = soup.select("article.property")  # Each listing container
+
+    listings = []
+    for card in property_cards:
+        a_tag = card.find("a", href=True)
+        if not a_tag:
+            continue
+        title = a_tag.get_text(strip=True)
+        relative_url = a_tag["href"]
+        full_url = "https://movingsoon.co.uk" + relative_url
+        listings.append((full_url, title))
+    return listings
+
+def send_telegram_message(title, url):
+    message = f"🏠 *New Clarion Listing Found!*\n\n*{title}*\n{url}"
+    try:
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Failed to send Telegram message: {e}")
+
+def main():
+    seen = load_seen()
+    print("Starting Clarion housing monitor bot...")
+
+    while True:
+        listings = fetch_listings()
+        new = False
+
+        for url, title in listings:
+            if url not in seen:
+                print(f"New listing: {title}")
+                send_telegram_message(title, url)
+                seen.add(url)
+                new = True
+
+        if new:
+            save_seen(seen)
+        else:
+            print("No new listings found.")
+
+        time.sleep(CHECK_INTERVAL)
+
+if __name__ == "__main__":
+    main()
