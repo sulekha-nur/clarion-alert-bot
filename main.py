@@ -7,7 +7,7 @@ from threading import Thread
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-MOVINGSOON_URL = "https://movingsoon.co.uk/housing-association/clarion-housing/"
+MOVINGSOON_URL = "https://movingsoon.co.uk/agent/clarionhg"
 seen = set()
 
 def send_alert(title, url):
